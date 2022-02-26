@@ -60,8 +60,8 @@ function generateProps(verb, pathKeys) {
     const responses = generateResponses(verb)
     pathItemObject[verb.type] = {
         tags: [verb.group],
-        summary: removeTags(verb.name) + ' v' + verb.version,
-        description: removeTags(verb.title),
+        summary: verb.version + ' ' + removeTags(verb.title),
+        description: removeTags(verb.description),
         parameters: parameters.parameters,
         responses
     }
@@ -133,10 +133,10 @@ function generateRequestBody(verb, mixedBody) {
     const bodyParameter = {
     	description: "Request body",
     	content: {"application/json":{
-        schema: {
-            properties: {},
-            type: 'object'
-        }
+		schema: {
+		    properties: {},
+		    type: 'object'
+		}
         }}
     }
     if (_.get(verb, 'parameter.examples.length') > 0) {
@@ -147,7 +147,6 @@ function generateRequestBody(verb, mixedBody) {
             bodyParameter.description = example.title
         }
     }
-
     transferApidocParamsToSwaggerBody(mixedBody, bodyParameter.content["application/json"])
     return bodyParameter
 }
@@ -164,7 +163,7 @@ function generateResponses(verb) {
             const { code, json } = safeParseJson(example.content, verb)
             const schema = GenerateSchema.json(example.title, json)
             delete schema.$schema
-            responses[code] = { content: {"application/json": {schema: schema}}, description: example.title }
+            responses[code] = { content: {"application/json": {schema: schema, example: json}}, description: example.title }
         }
 
     }
@@ -251,11 +250,20 @@ function transferApidocParamsToSwaggerBody(apiDocParams, parameterInBody) {
             // new mount point
             mountPlaces[key] = mountPlaces[objectName]['properties'][propertyName]
         } else {
-            mountPlaces[objectName]['properties'][propertyName] = {
+        	let property = {
                 type,
                 description: i.description,
                 default: i.defaultValue,
             }
+            if (i.allowedValues) {
+            	property.enum = i.allowedValues
+            }
+            if (i.defaultValue) {
+            	property.default = i.defaultValue
+            }
+            // todo: min-max length for strings
+            // todo: min-max value for numbers
+            mountPlaces[objectName]['properties'][propertyName] = property
         }
         if (!i.optional) {
             // generate-schema forget init [required]
