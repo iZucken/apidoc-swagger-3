@@ -34,13 +34,13 @@ function main(options) {
     if (app.options.parse !== true) {
         var apidocData = JSON.parse(api.data);
         if (options.config && options.config.endsWith(".json")) {
-            let configJson = fs.readFileSync(options.config)
-	        var projectData = JSON.parse(configJson)
-        } else {
+	    let configJson = fs.readFileSync(options.config)
+	    var projectData = JSON.parse(configJson)
+	} else {
             var projectData = JSON.parse(api.project)
         }
         const swagger = apidoc_to_swagger.toSwagger(apidocData, projectData)
-        api["swaggerData"] = JSON.stringify(swagger);
+        api["swaggerData"] = JSON.stringify(swagger, null, 2);
         createOutputFile(api, app.options.log)
     }
 }
