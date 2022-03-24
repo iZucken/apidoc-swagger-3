@@ -1,4 +1,5 @@
 var _ = require('lodash');
+const fs = require('fs')
 const { debug, log } = require('winston');
 const GenerateSchema = require('generate-schema')
 
@@ -10,7 +11,7 @@ var swagger = {
 
 function toSwagger(apidocJson, projectJson) {
     swagger.info = addInfo(projectJson);
-    swagger.paths = extractPaths(apidocJson);
+    swagger.paths = extractPaths(apidocJson, projectJson);
     return swagger;
 }
 
@@ -19,11 +20,15 @@ function addInfo(projectJson) {
     info["title"] = projectJson.title || projectJson.name;
     info["version"] = projectJson.version;
     info["description"] = projectJson.description;
+    if (projectJson.header && projectJson.header.filename) {
+        info["description"] = String(fs.readFileSync(projectJson.header.filename))
+    }
     return info;
 }
 
-function extractPaths(apidocJson) {
+function extractPaths(apidocJson, projectJson) {
 	var paths = {};
+	let apiPathPrefix = projectJson.url || ''
 	let versionMap = {}
 	for (var i = 0; i < apidocJson.length; i++) {
 		var verb = apidocJson[i];
@@ -43,7 +48,7 @@ function extractPaths(apidocJson) {
 		}
 		try {
 			var type = verb.type;
-			var obj = paths[url] = paths[url] || {};
+			var obj = paths[apiPathPrefix+url] = paths[apiPathPrefix+url] || {};
 			_.extend(obj, generateProps(verb, pathKeys))
 			versionMap[verb.url + verb.type] = verb.version
 		} catch (error) {
@@ -65,7 +70,7 @@ function generateProps(verb, pathKeys) {
         parameters: parameters.parameters,
         responses
     }
-    if (verb.type !== 'get' && parameters.requestBody) {
+    if (verb.type !== 'get' && verb.type !== 'delete' && parameters.requestBody) {
     pathItemObject[verb.type].requestBody = parameters.requestBody
     }
     return pathItemObject
@@ -91,7 +96,7 @@ function generateParameters(verb, pathKeys) {
 			})
 			return
         	}
-		if (verb.type === 'get') {
+		if (verb.type === 'get' || verb.type === 'delete') {
 			mixedQuery.push(p)
 		} else {
 			mixedBody.push(p)
@@ -161,7 +166,7 @@ function generateResponses(verb) {
     if (success && success.examples && success.examples.length > 0) {
         for (const example of success.examples) {
             const { code, json } = safeParseJson(example.content, verb)
-            const schema = GenerateSchema.json(example.title, json)
+            const schema = convertNullTypesToOpenApiNullables(GenerateSchema.json(example.title, json))
             delete schema.$schema
             responses[code] = { content: {"application/json": {schema: schema, example: json}}, description: example.title }
         }
@@ -171,7 +176,27 @@ function generateResponses(verb) {
     return responses
 }
 
-
+function convertNullTypesToOpenApiNullables (schema) {
+	if (schema.type === 'object') {
+		for (let property in schema.properties) {
+			schema.properties[property] = convertNullTypesToOpenApiNullables(schema.properties[property])
+		}
+		return schema
+	}
+	if (schema.type === 'null') {
+		return { type: 'object', default: null, nullable: true, properties: {} }
+	}
+	
+	for (let property in schema) {
+		if (schema[property].type === 'object') {
+			schema[property].properties = convertNullTypesToOpenApiNullables(schema[property].properties)
+		}
+		if (schema[property].type === 'null') {
+			schema[property] = { type: 'object', default: null, nullable: true, properties: {} }
+		}
+	}
+	return schema
+}
 
 function mountResponseSpecSchema(verb, responses) {
     // if (verb.success && verb.success['fields'] && verb.success['fields']['Success 200']) {
@@ -235,7 +260,8 @@ function transferApidocParamsToSwaggerBody(apiDocParams, parameterInBody) {
             if (!mountPlaces[objectName]['properties'][propertyName]) {
                 mountPlaces[objectName]['properties'][propertyName] = {
                     items: {
-                        type: type.slice(0, -2), description: i.description,
+                        type: type.slice(0, -2),
+                        description: i.description,
                         // default: i.defaultValue,
                         example: i.defaultValue
                     },
@@ -249,17 +275,23 @@ function transferApidocParamsToSwaggerBody(apiDocParams, parameterInBody) {
             }
             // new mount point
             mountPlaces[key] = mountPlaces[objectName]['properties'][propertyName]
+        } else if (type === 'null') {
+            // if schema(parsed from example) doesn't has this constructure, init
+            if (!mountPlaces[objectName]['properties'][propertyName]) {
+                mountPlaces[objectName]['properties'][propertyName] = { type: 'object', default: null, nullable: true, properties: {} }
+            }
+            // new mount point
+            mountPlaces[key] = mountPlaces[objectName]['properties'][propertyName]
         } else {
         	let property = {
                 type,
                 description: i.description,
-                default: i.defaultValue,
             }
             if (i.allowedValues) {
-            	property.enum = i.allowedValues
+            	property.enum = type === 'number' ? i.allowedValues.map(v => Number(v)) : i.allowedValues
             }
             if (i.defaultValue) {
-            	property.default = i.defaultValue
+            	property.default = type === 'number' ? Number(i.defaultValue) : i.defaultValue
             }
             // todo: min-max length for strings
             // todo: min-max value for numbers
