@@ -157,14 +157,9 @@ function generateRequestBody(verb, mixedBody) {
 }
 
 function generateResponses(verb) {
-    const success = verb.success
-    const responses = {
-        200: {
-            description: "ok (default)"
-        }
-    }
-    if (success && success.examples && success.examples.length > 0) {
-        for (const example of success.examples) {
+    const responses = {}
+    if (verb.success && verb.success.examples && verb.success.examples.length > 0) {
+        for (const example of verb.success.examples) {
             const { code, json } = safeParseJson(example.content, verb)
             const schema = convertNullTypesToOpenApiNullables(GenerateSchema.json(example.title, json))
             delete schema.$schema
@@ -172,7 +167,20 @@ function generateResponses(verb) {
         }
 
     }
-    mountResponseSpecSchema(verb, responses)
+    if (verb.error && verb.error.examples && verb.error.examples.length > 0) {
+        for (const example of verb.error.examples) {
+            const { code, json } = safeParseJson(example.content, verb)
+            const schema = convertNullTypesToOpenApiNullables(GenerateSchema.json(example.title, json))
+            delete schema.$schema
+            responses[code] = { content: {"application/json": {schema: schema, example: json}}, description: example.title }
+        }
+
+    }
+    if (Object.keys(responses).length === 0) {
+        responses[200] = {description: "ok (default)"}
+    }
+    // todo: discrepancy with parsed examples schema, which cover more codes
+    // mountResponseSpecSchema(verb, responses)
     return responses
 }
 
@@ -199,10 +207,10 @@ function convertNullTypesToOpenApiNullables (schema) {
 }
 
 function mountResponseSpecSchema(verb, responses) {
-    // if (verb.success && verb.success['fields'] && verb.success['fields']['Success 200']) {
-    if (_.get(verb, 'success.fields.Success 200')) {
+	let success = _.get(verb, 'success.fields.Success 200')
+    if (success && !responses[200]) {
         const apidocParams = verb.success['fields']['Success 200']
-        responses[200] = transferApidocParamsToSwaggerBody(apidocParams, responses[200])
+        responses[200] = transferApidocParamsToSwaggerBody(success, responses[200])
     }
 }
 
