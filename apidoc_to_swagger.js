@@ -1,13 +1,20 @@
-var _ = require('lodash');
+const _ = require('lodash');
+const crypto = require('crypto')
 const fs = require('fs')
 const { debug, log } = require('winston');
 const GenerateSchema = require('generate-schema')
+
+const md5 = string => crypto.createHash('md5').update(string).digest('hex')
 
 var swagger = {
     openapi: "3.0.3",
     info: {},
     paths: {},
     components: {
+    	schemas: {},
+    	parameters: {},
+    	requestBodies: {},
+    	responses: {},
     	securitySchemes: {
 	    	jwt: {
 		      type: "http",
@@ -20,7 +27,7 @@ var swagger = {
 
 function toSwagger(apidocJson, projectJson) {
     swagger.info = addInfo(projectJson);
-    swagger.paths = extractPaths(apidocJson, projectJson);
+    swagger.paths = extractPaths(apidocJson, projectJson, swagger);
     return swagger;
 }
 
@@ -35,7 +42,7 @@ function addInfo(projectJson) {
     return info;
 }
 
-function extractPaths(apidocJson, projectJson) {
+function extractPaths(apidocJson, projectJson, swagger) {
 	var paths = {};
 	let apiPathPrefix = projectJson.url || ''
 	let versionMap = {}
@@ -58,7 +65,7 @@ function extractPaths(apidocJson, projectJson) {
 		try {
 			var type = verb.type;
 			var obj = paths[apiPathPrefix+url] = paths[apiPathPrefix+url] || {};
-			_.extend(obj, generateProps(verb, pathKeys))
+			_.extend(obj, generateProps(verb, pathKeys, swagger))
 			versionMap[verb.url + verb.type] = verb.version
 		} catch (error) {
 			console.error(url, type, error);
@@ -68,7 +75,7 @@ function extractPaths(apidocJson, projectJson) {
 	return paths;
 }
 
-function generateProps(verb, pathKeys) {
+function generateProps(verb, pathKeys, swagger) {
     const pathItemObject = {}
     const parameters = generateParameters(verb, pathKeys)
     pathItemObject[verb.type] = {
@@ -77,7 +84,7 @@ function generateProps(verb, pathKeys) {
         description: removeTags(verb.description),
         parameters: parameters.parameters,
         security: generateSecurity(verb),
-        responses: generateResponses(verb)
+        responses: generateResponses(verb, swagger.components.responses)
     }
     if (verb.type !== 'get' && verb.type !== 'delete' && parameters.requestBody) {
     pathItemObject[verb.type].requestBody = parameters.requestBody
@@ -175,32 +182,38 @@ function generateRequestBody(verb, mixedBody) {
     return bodyParameter
 }
 
-function generateResponses(verb) {
-    const responses = {}
+function generateResponses(verb, responses) {
+    const verResponses = {}
     if (verb.success && verb.success.examples && verb.success.examples.length > 0) {
         for (const example of verb.success.examples) {
-            const { code, json } = safeParseJson(example.content, verb)
-            const schema = convertNullTypesToOpenApiNullables(GenerateSchema.json(example.title, json))
-            delete schema.$schema
-            responses[code] = { content: {"application/json": {schema: schema, example: json}}, description: example.title }
+	        const {code, responseHash} = generateResponseFromExample(example, verb, responses)
+            //responses[code] = { content: {"application/json": {schema: schema, example: json}}, description: example.title }
+            verResponses[code] = { $ref: "#/components/responses/" + responseHash }
         }
 
     }
     if (verb.error && verb.error.examples && verb.error.examples.length > 0) {
         for (const example of verb.error.examples) {
-            const { code, json } = safeParseJson(example.content, verb)
-            const schema = convertNullTypesToOpenApiNullables(GenerateSchema.json(example.title, json))
-            delete schema.$schema
-            responses[code] = { content: {"application/json": {schema: schema, example: json}}, description: example.title }
+	        const {code, responseHash} = generateResponseFromExample(example, verb, responses)
+            verResponses[code] = { $ref: "#/components/responses/" + responseHash }
         }
 
     }
     if (Object.keys(responses).length === 0) {
-        responses[200] = {description: "ok (default)"}
+        verResponses[200] = {description: "ok (default)"}
     }
     // todo: discrepancy with parsed examples schema, which cover more codes
     // mountResponseSpecSchema(verb, responses)
-    return responses
+    return verResponses
+}
+
+function generateResponseFromExample(example, verb, responses) {
+    const { code, json } = safeParseJson(example.content, verb)
+    const schema = convertNullTypesToOpenApiNullables(GenerateSchema.json(example.title, json))
+    delete schema.$schema
+    let responseHash = md5(JSON.stringify(schema))
+    responses[responseHash] = { content: {"application/json": {schema, example: json}}, description: example.title }
+    return {code, responseHash}
 }
 
 function convertNullTypesToOpenApiNullables (schema) {
