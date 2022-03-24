@@ -58,6 +58,7 @@ const options = {
     dest: argv.output,
     verbose: argv.verbose,
     debug: argv.debug,
+    config: argv.config,
     parse: parsee,
 
     filters: transformToObject(argv.parseFilters),
