@@ -4,7 +4,7 @@ const fs = require('fs')
 const { debug, log } = require('winston');
 const GenerateSchema = require('generate-schema')
 
-const md5 = string => crypto.createHash('md5').update(string).digest('hex')
+const hashObject = object => crypto.createHash('sha1').update(JSON.stringify(object)).digest('hex')
 
 var swagger = {
     openapi: "3.0.3",
@@ -77,7 +77,7 @@ function extractPaths(apidocJson, projectJson, swagger) {
 
 function generateProps(verb, pathKeys, swagger) {
     const pathItemObject = {}
-    const parameters = generateParameters(verb, pathKeys)
+    const parameters = generateParameters(verb, pathKeys, swagger)
     pathItemObject[verb.type] = {
         tags: [verb.group],
         summary: verb.version + ' ' + removeTags(verb.title),
@@ -102,7 +102,7 @@ function generateSecurity (verb) {
     return security.length ? security : undefined
 }
 
-function generateParameters(verb, pathKeys) {
+function generateParameters(verb, pathKeys, swagger) {
     const mixedQuery = []
     const mixedBody = []
     const parameters = []
@@ -113,14 +113,17 @@ function generateParameters(verb, pathKeys) {
         mixedBody.push(...(verb.parameter.fields.Body || []))
         Parameter.forEach(p => {
         	if (pathKeys[p.field]) {
-        		parameters.push({
-				in: 'path',
-				name: p.field,
-				description: removeTags(p.description),
-				required: !p.optional,
-				schema: {type: p.type.toLowerCase()}
-			})
-			return
+        		let parameter = {
+					in: 'path',
+					name: p.field,
+					description: removeTags(p.description),
+					required: !p.optional,
+					schema: {type: p.type.toLowerCase()}
+				}
+				let parameterKey = hashObject(parameter)
+				swagger.components.parameters[parameterKey] = parameter
+        		parameters.push({$ref:"#/components/parameters/"+parameterKey})
+				return
         	}
 		if (verb.type === 'get' || verb.type === 'delete') {
 			mixedQuery.push(p)
@@ -130,13 +133,16 @@ function generateParameters(verb, pathKeys) {
         })
     }
     parameters.push(...mixedQuery.map(p => {
-	    return {
-		in: 'query',
-		name: p.field,
-		description: removeTags(p.description),
-		required: !p.optional,
-		schema: {type: p.type.toLowerCase()}
+		let parameter = {
+			in: 'query',
+			name: p.field,
+			description: removeTags(p.description),
+			required: !p.optional,
+			schema: {type: p.type.toLowerCase()}
 	    }
+		let parameterKey = hashObject(parameter)
+		swagger.components.parameters[parameterKey] = parameter
+		return {$ref:"#/components/parameters/"+parameterKey}
     }))
     parameters.push(...header.map(mapHeaderItem))
     requestBody = generateRequestBody(verb, mixedBody)
@@ -208,10 +214,10 @@ function generateResponses(verb, responses) {
 }
 
 function generateResponseFromExample(example, verb, responses) {
-    const { code, json } = safeParseJson(example.content, verb)
+    const {code, json} = safeParseJson(example.content, verb)
     const schema = convertNullTypesToOpenApiNullables(GenerateSchema.json(example.title, json))
     delete schema.$schema
-    let responseHash = md5(JSON.stringify(schema))
+    let responseHash = hashObject(JSON.stringify({schema, example: example.content}))
     responses[responseHash] = { content: {"application/json": {schema, example: json}}, description: example.title }
     return {code, responseHash}
 }
