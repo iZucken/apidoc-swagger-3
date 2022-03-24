@@ -6,8 +6,6 @@ var apidoc = require('apidoc-core')
 var winston = require('winston');
 
 const apidoc_to_swagger = require('./apidoc_to_swagger');
-apidoc.setGeneratorInfos({ name: 'name', time: new Date(), version: '0.0.1', url: 'xxx url' })
-
 
 function generateLog() {
     var log = winston.createLogger({
@@ -26,21 +24,22 @@ function generateLog() {
 }
 
 function main(options) {
-
+    apidoc.setGeneratorInfos({ name: 'name', time: new Date(), version: '0.0.1', url: 'xxx url' })
     app.options = options
     app.options.verbose && console.log('options', app.options);
     generateLog()
     const { src, dest, verbose } = options
     apidoc.setLogger(app.options.log)
-
     var api = apidoc.parse({ ...app.options, log: app.options.log })
-
     if (app.options.parse !== true) {
         var apidocData = JSON.parse(api.data);
-        var projectData = JSON.parse(api.project);
-
+        if (options.config && options.config.endsWith(".json")) {
+            let configJson = fs.readFileSync(options.config)
+	        var projectData = JSON.parse(configJson)
+        } else {
+            var projectData = JSON.parse(api.project)
+        }
         const swagger = apidoc_to_swagger.toSwagger(apidocData, projectData)
-
         api["swaggerData"] = JSON.stringify(swagger);
         createOutputFile(api, app.options.log)
     }
