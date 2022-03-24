@@ -6,7 +6,16 @@ const GenerateSchema = require('generate-schema')
 var swagger = {
     openapi: "3.0.3",
     info: {},
-    paths: {}
+    paths: {},
+    components: {
+    	securitySchemes: {
+	    	jwt: {
+		      type: "http",
+		      bearerFormat: "JWT",
+    		  scheme: "bearer",
+      		}
+    	}
+    },
 };
 
 function toSwagger(apidocJson, projectJson) {
@@ -62,18 +71,28 @@ function extractPaths(apidocJson, projectJson) {
 function generateProps(verb, pathKeys) {
     const pathItemObject = {}
     const parameters = generateParameters(verb, pathKeys)
-    const responses = generateResponses(verb)
     pathItemObject[verb.type] = {
         tags: [verb.group],
         summary: verb.version + ' ' + removeTags(verb.title),
         description: removeTags(verb.description),
         parameters: parameters.parameters,
-        responses
+        security: generateSecurity(verb),
+        responses: generateResponses(verb)
     }
     if (verb.type !== 'get' && verb.type !== 'delete' && parameters.requestBody) {
     pathItemObject[verb.type].requestBody = parameters.requestBody
     }
     return pathItemObject
+}
+
+function generateSecurity (verb) {
+    let security = []
+    for (let example of verb.examples) {
+	    if (example.content.includes("Authorization: Bearer")) {
+	    	security.push({jwt: []})
+    	}
+    }
+    return security.length ? security : undefined
 }
 
 function generateParameters(verb, pathKeys) {
