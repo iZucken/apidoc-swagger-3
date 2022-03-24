@@ -333,8 +333,16 @@ function transferApidocParamsToSwaggerBody(apiDocParams, parameterInBody) {
             if (i.defaultValue) {
             	property.default = type === 'number' ? Number(i.defaultValue) : i.defaultValue
             }
-            // todo: min-max length for strings
-            // todo: min-max value for numbers
+            if (i.size) {
+            	let sizes = i.size.split("..")
+            	if (type === "string") {
+            	property.minLength = sizes[0] ? Number(sizes[0]) : undefined
+            	property.maxLength = sizes[1] ? Number(sizes[1]) : undefined
+            	} else if (type === "number") {
+            	property.minimum = sizes[0] ? Number(sizes[0]) : undefined
+            	property.maximum = sizes[1] ? Number(sizes[1]) : undefined
+            	}
+            }
             mountPlaces[objectName]['properties'][propertyName] = property
         }
         if (!i.optional) {
