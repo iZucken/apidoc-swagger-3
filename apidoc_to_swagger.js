@@ -26,6 +26,10 @@ var swagger = {
     hashNameMap: {},
 }
 
+function isThinRequest(verb) {
+	return verb.type === 'get' || verb.type === 'delete' || verb.type === 'options'
+}
+
 function swaggerComponent(swagger, type, data, name) {
 	let hash = hashObject(data)
 	if (swagger.hashNameMap[hash]) {
@@ -97,10 +101,8 @@ function generateProps(verb, pathKeys, swagger) {
         description: removeTags(verb.description),
         parameters: parameters.parameters && parameters.parameters.length ? parameters.parameters : undefined,
         security: generateSecurity(verb),
-        responses: generateResponses(verb, swagger)
-    }
-    if (verb.type !== 'get' && verb.type !== 'delete' && parameters.requestBody) {
-    pathItemObject[verb.type].requestBody = parameters.requestBody
+        responses: generateResponses(verb, swagger),
+        requestBody: parameters.requestBody,
     }
     return pathItemObject
 }
@@ -158,7 +160,7 @@ function generateParameters(verb, pathKeys, swagger) {
         		parameters.push(swaggerComponent(swagger, 'parameters', parameter, atVerb(verb, 'PathParameter', p.field)))
 				return
         	}
-		if (verb.type === 'get' || verb.type === 'delete') {
+		if (isThinRequest(verb)) {
 			mixedQuery.push(p)
 		} else {
 			mixedBody.push(p)
@@ -176,8 +178,10 @@ function generateParameters(verb, pathKeys, swagger) {
 		return swaggerComponent(swagger, 'parameters', parameter, atVerb(verb, 'QueryParameter', p.field))
     }))
     parameters.push(...header.map(mapHeaderItem))
-    requestBody = generateRequestBody(verb, mixedBody, swagger)
-    return {parameters, requestBody}
+    return {
+    	parameters,
+    	requestBody: !isThinRequest(verb) ? generateRequestBody(verb, mixedBody, swagger) : undefined
+	}
 }
 
 function mapHeaderItem(i) {
@@ -199,7 +203,6 @@ function removeTags(text) {
 
 function generateRequestBody(verb, mixedBody, swagger) {
     const bodyParameter = {
-    	description: "Request body",
     	content: {"application/json":{
 		schema: {
 		    properties: {},
@@ -207,17 +210,10 @@ function generateRequestBody(verb, mixedBody, swagger) {
 		}
         }}
     }
-    if (_.get(verb, 'parameter.examples.length') > 0) {
-        for (const example of verb.parameter.examples) {
-            const { code, json } = safeParseJson(example.content, verb)
-            const schema = GenerateSchema.json(example.title, json)
-            bodyParameter.content["application/json"].schema = schema
-            bodyParameter.description = example.title
-        }
-    }
-    transferApidocParamsToSwaggerBody(mixedBody, bodyParameter.content["application/json"], swagger.components.schemas)
-//    bodyParameter.content["application/json"].schema = collapseRepeatingSchemas(bodyParameter.content["application/json"].schema, swagger.components.schemas)
-    return bodyParameter
+    transferApidocParamsToSwaggerBody(mixedBody, bodyParameter.content["application/json"])
+    bodyParameter.content["application/json"].schema =
+    	collapseRepeatingSchemas(bodyParameter.content["application/json"].schema, swagger, verb)
+    return swaggerComponent(swagger, 'requestBodies', bodyParameter, atVerb(verb, "RequestBody"))
 }
 
 function generateResponses(verb, swagger) {
@@ -245,9 +241,10 @@ function generateResponses(verb, swagger) {
 function generateResponseFromExample(responses, example, verb, swagger) {
     const {code, json} = safeParseJson(example.content, verb)
     const schema = convertNullTypesToOpenApiNullables(GenerateSchema.json(example.title, json))
+    delete schema.title
     delete schema.$schema
     let response = {content: {"application/json": {
-    	schema: swaggerComponent(swagger, 'schemas', schema, atVerb(verb, "ResponseSchema")),
+    	schema: swaggerComponent(swagger, 'schemas', schema, atVerb(verb, "ResponseSchema", String(code))),
     	example: json
 	}}, description: example.title}
     responses[code] = swaggerComponent(swagger, 'responses', response, atVerb(verb, "Response", String(code)))
@@ -279,7 +276,7 @@ function mountResponseSpecSchema(verb, responses, swagger) {
 	let success = _.get(verb, 'success.fields.Success 200')
     if (success && !responses[200]) {
         const apidocParams = verb.success['fields']['Success 200']
-        responses[200] = transferApidocParamsToSwaggerBody(success, responses[200], swagger.components.schemas)
+        responses[200] = transferApidocParamsToSwaggerBody(success, responses[200])
     }
 }
 
@@ -299,21 +296,17 @@ function safeParseJson(content, verb) {
     return {code, json}
 }
 
-function collapseRepeatingSchemas (schema, schemas) {
+function collapseRepeatingSchemas (schema, swagger, verb) {
 	if (schema.type === "array") {
-		let hash = hashObject(schema.items)
-		schemas[hash] = schema.items
-		return {type: "array", items: {$ref: "#/components/schemas/"+hash}}
+		return {type: "array", items: swaggerComponent(swagger, "schemas", schema, atVerb(verb, "RequestSchema"))}
 	}
-	//if (schema.type === "object") {
-	//	let hash = hashObject(schema)
-	//	schemas[hash] = schema
-	//	return {$ref: "#/components/schemas/"+hash}
-	//} 
-	//return schema
+	if (schema.type === "object") {
+		return swaggerComponent(swagger, "schemas", schema, atVerb(verb, "RequestSchema"))
+	}
+	return schema
 }
 
-function transferApidocParamsToSwaggerBody(apiDocParams, parameterInBody, schemas) {
+function transferApidocParamsToSwaggerBody(apiDocParams, parameterInBody) {
     let mountPlaces = {
         '': parameterInBody.schema
     }
