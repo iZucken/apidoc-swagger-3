@@ -23,12 +23,25 @@ var swagger = {
       		}
     	}
     },
-};
+    hashNameMap: {},
+}
+
+function swaggerComponent(swagger, type, data, name) {
+	let hash = hashObject(data)
+	if (swagger.hashNameMap[hash]) {
+		name = swagger.hashNameMap[hash]
+	} else {
+		swagger.hashNameMap[hash] = name
+	}
+	swagger.components[type][name] = data
+	return {$ref: `#/components/${type}/${name}`}
+}
 
 function toSwagger(apidocJson, projectJson) {
-    swagger.info = addInfo(projectJson);
-    swagger.paths = extractPaths(apidocJson, projectJson, swagger);
-    return swagger;
+    swagger.info = addInfo(projectJson)
+    swagger.paths = extractPaths(apidocJson, projectJson, swagger)
+    delete swagger.hashNameMap
+    return swagger
 }
 
 function addInfo(projectJson) {
@@ -82,7 +95,7 @@ function generateProps(verb, pathKeys, swagger) {
         tags: [verb.group],
         summary: verb.version + ' ' + removeTags(verb.title),
         description: removeTags(verb.description),
-        parameters: parameters.parameters,
+        parameters: parameters.parameters && parameters.parameters.length ? parameters.parameters : undefined,
         security: generateSecurity(verb),
         responses: generateResponses(verb, swagger.components.responses)
     }
@@ -100,6 +113,28 @@ function generateSecurity (verb) {
     	}
     }
     return security.length ? security : undefined
+}
+
+const slashMatchRegex = /\//g
+
+function capitalizeFirstLetter(string) {
+  return string.charAt(0).toUpperCase() + string.slice(1)
+}
+
+function capitalizeJoin(strings) {
+  return strings.map(string => capitalizeFirstLetter(string)).join('')
+}
+
+
+const urlSplitMatchRegex = /[\/\:]/g
+
+function atVerb(verb, ...at) {
+	return capitalizeJoin([
+		...at,
+		'at',
+		verb.type,
+		...verb.url.split('?')[0].split(urlSplitMatchRegex).filter(v => !!v)
+	])
 }
 
 function generateParameters(verb, pathKeys, swagger) {
@@ -120,9 +155,7 @@ function generateParameters(verb, pathKeys, swagger) {
 					required: !p.optional,
 					schema: {type: p.type.toLowerCase()}
 				}
-				let parameterKey = hashObject(parameter)
-				swagger.components.parameters[parameterKey] = parameter
-        		parameters.push({$ref:"#/components/parameters/"+parameterKey})
+        		parameters.push(swaggerComponent(swagger, 'parameters', parameter, atVerb(verb, 'PathParameter', p.field)))
 				return
         	}
 		if (verb.type === 'get' || verb.type === 'delete') {
@@ -140,12 +173,10 @@ function generateParameters(verb, pathKeys, swagger) {
 			required: !p.optional,
 			schema: {type: p.type.toLowerCase()}
 	    }
-		let parameterKey = hashObject(parameter)
-		swagger.components.parameters[parameterKey] = parameter
-		return {$ref:"#/components/parameters/"+parameterKey}
+		return swaggerComponent(swagger, 'parameters', parameter, atVerb(verb, 'QueryParameter', p.field))
     }))
     parameters.push(...header.map(mapHeaderItem))
-    requestBody = generateRequestBody(verb, mixedBody)
+    requestBody = generateRequestBody(verb, mixedBody, swagger)
     return {parameters, requestBody}
 }
 
@@ -166,7 +197,7 @@ function removeTags(text) {
     return text ? text.replace(tagsRegex, "") : text;
 }
 
-function generateRequestBody(verb, mixedBody) {
+function generateRequestBody(verb, mixedBody, swagger) {
     const bodyParameter = {
     	description: "Request body",
     	content: {"application/json":{
@@ -184,7 +215,8 @@ function generateRequestBody(verb, mixedBody) {
             bodyParameter.description = example.title
         }
     }
-    transferApidocParamsToSwaggerBody(mixedBody, bodyParameter.content["application/json"])
+    transferApidocParamsToSwaggerBody(mixedBody, bodyParameter.content["application/json"], swagger.components.schemas)
+//    bodyParameter.content["application/json"].schema = collapseRepeatingSchemas(bodyParameter.content["application/json"].schema, swagger.components.schemas)
     return bodyParameter
 }
 
@@ -193,7 +225,6 @@ function generateResponses(verb, responses) {
     if (verb.success && verb.success.examples && verb.success.examples.length > 0) {
         for (const example of verb.success.examples) {
 	        const {code, responseHash} = generateResponseFromExample(example, verb, responses)
-            //responses[code] = { content: {"application/json": {schema: schema, example: json}}, description: example.title }
             verResponses[code] = { $ref: "#/components/responses/" + responseHash }
         }
 
@@ -230,7 +261,7 @@ function convertNullTypesToOpenApiNullables (schema) {
 		return schema
 	}
 	if (schema.type === 'null') {
-		return { type: 'object', default: null, nullable: true, properties: {} }
+		return { type: 'object', default: null, nullable: true }
 	}
 	
 	for (let property in schema) {
@@ -238,17 +269,17 @@ function convertNullTypesToOpenApiNullables (schema) {
 			schema[property].properties = convertNullTypesToOpenApiNullables(schema[property].properties)
 		}
 		if (schema[property].type === 'null') {
-			schema[property] = { type: 'object', default: null, nullable: true, properties: {} }
+			schema[property] = { type: 'object', default: null, nullable: true }
 		}
 	}
 	return schema
 }
 
-function mountResponseSpecSchema(verb, responses) {
+function mountResponseSpecSchema(verb, responses, swagger) {
 	let success = _.get(verb, 'success.fields.Success 200')
     if (success && !responses[200]) {
         const apidocParams = verb.success['fields']['Success 200']
-        responses[200] = transferApidocParamsToSwaggerBody(success, responses[200])
+        responses[200] = transferApidocParamsToSwaggerBody(success, responses[200], swagger.components.schemas)
     }
 }
 
@@ -268,66 +299,57 @@ function safeParseJson(content, verb) {
     return {code, json}
 }
 
-
-function createNestedName(field, defaultObjectName) {
-    let propertyName = field;
-    let objectName;
-    let propertyNames = field.split(".");
-    if (propertyNames && propertyNames.length > 1) {
-        propertyName = propertyNames.pop();
-        objectName = propertyNames.join(".");
-    }
-
-    return {
-        propertyName: propertyName,
-        objectName: objectName || defaultObjectName
-    }
+function collapseRepeatingSchemas (schema, schemas) {
+	if (schema.type === "array") {
+		let hash = hashObject(schema.items)
+		schemas[hash] = schema.items
+		return {type: "array", items: {$ref: "#/components/schemas/"+hash}}
+	}
+	//if (schema.type === "object") {
+	//	let hash = hashObject(schema)
+	//	schemas[hash] = schema
+	//	return {$ref: "#/components/schemas/"+hash}
+	//} 
+	//return schema
 }
 
-function transferApidocParamsToSwaggerBody(apiDocParams, parameterInBody) {
+function transferApidocParamsToSwaggerBody(apiDocParams, parameterInBody, schemas) {
     let mountPlaces = {
-        '': parameterInBody['schema']
+        '': parameterInBody.schema
     }
     apiDocParams.forEach(i => {
-        const type = i.type.toLowerCase()
-        const key = i.field
-        const nestedName = createNestedName(i.field)
-        const { objectName = '', propertyName } = nestedName
+    const type = i.type.toLowerCase()
+    const key = i.field
+    const nestedName = createNestedName(i.field)
+    const { objectName = '', propertyName } = nestedName
+	// todo: avoid if
 	if (mountPlaces[objectName]) {
         if (type.endsWith('object[]')) {
-            // if schema(parsed from example) doesn't has this constructure, init
-            if (!mountPlaces[objectName]['properties'][propertyName]) {
-                mountPlaces[objectName]['properties'][propertyName] = { type: 'array', items: { type: 'object', properties: {} } }
+            if (!mountPlaces[objectName].properties[propertyName]) {
+                mountPlaces[objectName].properties[propertyName] = { type: 'array', items: { type: 'object', properties: {} } }
             }
-            // new mount point
-            mountPlaces[key] = mountPlaces[objectName]['properties'][propertyName]['items']
+            mountPlaces[key] = mountPlaces[objectName].properties[propertyName].items
         } else if (type.endsWith('[]')) {
-            // if schema(parsed from example) doesn't has this constructure, init
-            if (!mountPlaces[objectName]['properties'][propertyName]) {
-                mountPlaces[objectName]['properties'][propertyName] = {
+            if (!mountPlaces[objectName].properties[propertyName]) {
+                mountPlaces[objectName].properties[propertyName] = {
+                    type: 'array',
                     items: {
                         type: type.slice(0, -2),
                         description: i.description,
-                        // default: i.defaultValue,
                         example: i.defaultValue
-                    },
-                    type: 'array'
+                    }
                 }
             }
         } else if (type === 'object') {
-            // if schema(parsed from example) doesn't has this constructure, init
-            if (!mountPlaces[objectName]['properties'][propertyName]) {
-                mountPlaces[objectName]['properties'][propertyName] = { type: 'object', properties: {} }
+            if (!mountPlaces[objectName].properties[propertyName]) {
+                mountPlaces[objectName].properties[propertyName] = { type: 'object', properties: {} }
             }
-            // new mount point
-            mountPlaces[key] = mountPlaces[objectName]['properties'][propertyName]
+            mountPlaces[key] = mountPlaces[objectName].properties[propertyName]
         } else if (type === 'null') {
-            // if schema(parsed from example) doesn't has this constructure, init
-            if (!mountPlaces[objectName]['properties'][propertyName]) {
-                mountPlaces[objectName]['properties'][propertyName] = { type: 'object', default: null, nullable: true, properties: {} }
+            if (!mountPlaces[objectName].properties[propertyName]) {
+                mountPlaces[objectName].properties[propertyName] = { type: 'object', default: null, nullable: true }
             }
-            // new mount point
-            mountPlaces[key] = mountPlaces[objectName]['properties'][propertyName]
+            mountPlaces[key] = mountPlaces[objectName].properties[propertyName]
         } else {
         	let property = {
                 type,
@@ -342,26 +364,37 @@ function transferApidocParamsToSwaggerBody(apiDocParams, parameterInBody) {
             if (i.size) {
             	let sizes = i.size.split("..")
             	if (type === "string") {
-            	property.minLength = sizes[0] ? Number(sizes[0]) : undefined
-            	property.maxLength = sizes[1] ? Number(sizes[1]) : undefined
+		        	property.minLength = sizes[0] ? Number(sizes[0]) : undefined
+		        	property.maxLength = sizes[1] ? Number(sizes[1]) : undefined
             	} else if (type === "number") {
-            	property.minimum = sizes[0] ? Number(sizes[0]) : undefined
-            	property.maximum = sizes[1] ? Number(sizes[1]) : undefined
+		        	property.minimum = sizes[0] ? Number(sizes[0]) : undefined
+		        	property.maximum = sizes[1] ? Number(sizes[1]) : undefined
             	}
             }
-            mountPlaces[objectName]['properties'][propertyName] = property
+            mountPlaces[objectName].properties[propertyName] = property
         }
         if (!i.optional) {
-            // generate-schema forget init [required]
-            if (mountPlaces[objectName]['required']) {
-                mountPlaces[objectName]['required'].push(propertyName)
+            if (mountPlaces[objectName].required) {
+                mountPlaces[objectName].required.push(propertyName)
             } else {
-                mountPlaces[objectName]['required'] = [propertyName]
+                mountPlaces[objectName].required = [propertyName]
             }
         }
-        }
+    }
     })
     return parameterInBody
+}
+
+
+function createNestedName(field) {
+    let propertyName = field;
+    let objectName;
+    let propertyNames = field.split(".");
+    if (propertyNames && propertyNames.length > 1) {
+        propertyName = propertyNames.pop();
+        objectName = propertyNames.join(".");
+    }
+    return {propertyName, objectName}
 }
 
 module.exports = {
