@@ -97,7 +97,7 @@ function generateProps(verb, pathKeys, swagger) {
         description: removeTags(verb.description),
         parameters: parameters.parameters && parameters.parameters.length ? parameters.parameters : undefined,
         security: generateSecurity(verb),
-        responses: generateResponses(verb, swagger.components.responses)
+        responses: generateResponses(verb, swagger)
     }
     if (verb.type !== 'get' && verb.type !== 'delete' && parameters.requestBody) {
     pathItemObject[verb.type].requestBody = parameters.requestBody
@@ -220,37 +220,37 @@ function generateRequestBody(verb, mixedBody, swagger) {
     return bodyParameter
 }
 
-function generateResponses(verb, responses) {
-    const verResponses = {}
+function generateResponses(verb, swagger) {
+    const verbResponses = {}
     if (verb.success && verb.success.examples && verb.success.examples.length > 0) {
         for (const example of verb.success.examples) {
-	        const {code, responseHash} = generateResponseFromExample(example, verb, responses)
-            verResponses[code] = { $ref: "#/components/responses/" + responseHash }
+        	generateResponseFromExample(verbResponses, example, verb, swagger)
         }
 
     }
     if (verb.error && verb.error.examples && verb.error.examples.length > 0) {
         for (const example of verb.error.examples) {
-	        const {code, responseHash} = generateResponseFromExample(example, verb, responses)
-            verResponses[code] = { $ref: "#/components/responses/" + responseHash }
+        	generateResponseFromExample(verbResponses, example, verb, swagger)
         }
 
     }
-    if (Object.keys(responses).length === 0) {
-        verResponses[200] = {description: "ok (default)"}
+    if (Object.keys(verbResponses).length === 0) {
+        verbResponses[200] = {description: "OK"}
     }
     // todo: discrepancy with parsed examples schema, which cover more codes
     // mountResponseSpecSchema(verb, responses)
-    return verResponses
+    return verbResponses
 }
 
-function generateResponseFromExample(example, verb, responses) {
+function generateResponseFromExample(responses, example, verb, swagger) {
     const {code, json} = safeParseJson(example.content, verb)
     const schema = convertNullTypesToOpenApiNullables(GenerateSchema.json(example.title, json))
     delete schema.$schema
-    let responseHash = hashObject(JSON.stringify({schema, example: example.content}))
-    responses[responseHash] = { content: {"application/json": {schema, example: json}}, description: example.title }
-    return {code, responseHash}
+    let response = {content: {"application/json": {
+    	schema: swaggerComponent(swagger, 'schemas', schema, atVerb(verb, "ResponseSchema")),
+    	example: json
+	}}, description: example.title}
+    responses[code] = swaggerComponent(swagger, 'responses', response, atVerb(verb, "Response", String(code)))
 }
 
 function convertNullTypesToOpenApiNullables (schema) {
